@@ -33,22 +33,22 @@ const fetchAndSaveData = async (req, res) => {
     console.log("📡 Début de fetchAndSaveData...");
 
     try {
-        console.log("🚀 Envoi de la requête à l'API Flask...");
+        console.log(" Envoi de la requête à l'API Flask...");
         const flaskResponse = await axios.post('http://127.0.0.1:5000/html_scrape_home_posts');
 
         if (!flaskResponse.data.posts || !Array.isArray(flaskResponse.data.posts)) {
-            console.warn("⚠️ Réponse inattendue de Flask :", flaskResponse.data);
+            console.warn(" Réponse inattendue de Flask :", flaskResponse.data);
             return res.status(400).json({ error: "Réponse invalide reçue de Flask" });
         }
 
         const posts = flaskResponse.data.posts;
 
         if (posts.length === 0) {
-            console.warn("⚠️ Aucun post reçu de Flask.");
+            console.warn(" Aucun post reçu de Flask.");
             return res.status(404).json({ error: "Aucun post trouvé" });
         }
 
-        console.log(`📩 ${posts.length} posts reçus. Enregistrement en cours...`);
+        console.log(` ${posts.length} posts reçus. Enregistrement en cours...`);
         const savedPosts = [];
 
         for (const post of posts) {
@@ -56,13 +56,14 @@ const fetchAndSaveData = async (req, res) => {
             const postText = post.Texte || "Texte non disponible";
             const postAuthor = post.Auteur || "Auteur inconnu";
             
-            // ✅ Correction de la date pour éviter "Unknown"
+            
             const postDate = post.Date && post.Date !== "Unknown" 
                 ? post.Date 
-                : new Date().toISOString().slice(0, 19).replace("T", " "); // Formate en "YYYY-MM-DD HH:MM:SS"
+                // Formate en "YYYY-MM-DD HH:MM:SS"
+                : new Date().toISOString().slice(0, 19).replace("T", " "); 
 
             const postHash = generateHash(htmlContent);
-            console.log(`🔍 Vérification du post avec hash: ${postHash}`);
+            console.log(` Vérification du post avec hash: ${postHash}`);
 
             const [existingPost] = await db.query('SELECT * FROM posts WHERE post_hash = ?', [postHash]);
 
@@ -75,11 +76,11 @@ const fetchAndSaveData = async (req, res) => {
                         [postAuthor, postDate, postText, htmlContent, postHash]
                     );
 
-                    console.log(`✅ Post ajouté avec ID: ${result.insertId}`);
+                    console.log(` Post ajouté avec ID: ${result.insertId}`);
                     savedPosts.push({ id: result.insertId, Auteur: postAuthor, Date: postDate, Texte: postText, html_content: htmlContent });
 
                 } catch (sqlError) {
-                    console.error("❌ Erreur SQL lors de l'insertion:", sqlError.sqlMessage);
+                    console.error(" Erreur SQL lors de l'insertion:", sqlError.sqlMessage);
                 }
             } else {
                 console.log("ℹ️ Post déjà existant, aucune insertion.");
@@ -87,11 +88,11 @@ const fetchAndSaveData = async (req, res) => {
             }
         }
 
-        console.log("🎉 Tous les posts ont été traités avec succès.");
+        console.log(" Tous les posts ont été traités avec succès.");
         res.status(201).json({ message: "Données enregistrées avec succès", savedPosts });
 
     } catch (error) {
-        console.error("❌ Erreur dans fetchAndSaveData:", error.message);
+        console.error(" Erreur dans fetchAndSaveData:", error.message);
         res.status(500).json({ error: error.message });
     }
 };
@@ -103,7 +104,7 @@ const getAllPosts = async (req, res) => {
         const [posts] = await db.query('SELECT * FROM posts ORDER BY date DESC'); // Trie les posts du plus récent au plus ancien
         res.status(200).json(posts);
     } catch (error) {
-        console.error("❌ Erreur lors de la récupération des posts:", error.message);
+        console.error("Erreur lors de la récupération des posts:", error.message);
         res.status(500).json({ error: "Erreur serveur lors de la récupération des posts" });
     }
 };
