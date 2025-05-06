@@ -31,6 +31,12 @@ connection.connect(err => {
 app.use("/api/auth", authRoutes);  // Utilisation des routes d'authentification
 app.use("/api/data", dataRoutes);
 
+app.post('/register', (req, res) => {
+  const { username, email, password } = req.body;
+  console.log('Received data:', username, email, password);
+  res.status(200).json({ message: 'User registered successfully!' });
+});
+
 
 // Lancer le serveur
 const PORT = process.env.PORT || 3000;

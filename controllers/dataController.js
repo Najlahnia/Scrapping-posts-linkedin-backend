@@ -1,8 +1,10 @@
-const axios = require('axios');  // Importation manquante
-const { generateHash } = require('../services/hashService');
+const axios = require('axios');
 const db = require('../db');
+const { generateHash } = require('../services/hashService');
+const { saveToCSV } = require('../services/csvService'); 
+const { analyzeTextWithGemini } = require('../services/geminiService');
+const fs = require('fs');
 
-// Fonction pour enregistrer les données
 const saveData = async (req, res) => {
     const { posts } = req.body;
 
@@ -19,7 +21,7 @@ const saveData = async (req, res) => {
                 return { id: result.insertId, ...post };
             }
 
-            return existingPost[0];  // Renvoie l'existant si déjà en BD
+            return existingPost[0];
         }));
 
         res.status(201).json({ message: 'Data saved successfully', savedPosts });
@@ -30,21 +32,17 @@ const saveData = async (req, res) => {
 };
 
 const fetchAndSaveData = async (req, res) => {
-    console.log("📡 Début de fetchAndSaveData...");
+    console.log(" Début de fetchAndSaveData...");
 
     try {
-        console.log(" Envoi de la requête à l'API Flask...");
         const flaskResponse = await axios.post('http://127.0.0.1:5000/html_scrape_home_posts');
 
         if (!flaskResponse.data.posts || !Array.isArray(flaskResponse.data.posts)) {
-            console.warn(" Réponse inattendue de Flask :", flaskResponse.data);
             return res.status(400).json({ error: "Réponse invalide reçue de Flask" });
         }
 
         const posts = flaskResponse.data.posts;
-
         if (posts.length === 0) {
-            console.warn(" Aucun post reçu de Flask.");
             return res.status(404).json({ error: "Aucun post trouvé" });
         }
 
@@ -52,43 +50,21 @@ const fetchAndSaveData = async (req, res) => {
         const savedPosts = [];
 
         for (const post of posts) {
-            const htmlContent = post.HTML || ""; 
-            const postText = post.Texte || "Texte non disponible";
-            const postAuthor = post.Auteur || "Auteur inconnu";
-            
-            
-            const postDate = post.Date && post.Date !== "Unknown" 
-                ? post.Date 
-                // Formate en "YYYY-MM-DD HH:MM:SS"
-                : new Date().toISOString().slice(0, 19).replace("T", " "); 
-
-            const postHash = generateHash(htmlContent);
-            console.log(` Vérification du post avec hash: ${postHash}`);
-
+            const postHash = generateHash(post.HTML);
             const [existingPost] = await db.query('SELECT * FROM posts WHERE post_hash = ?', [postHash]);
 
             if (existingPost.length === 0) {
-                console.log("🆕 Nouveau post détecté, insertion en base de données...");
+                const [result] = await db.query(
+                    'INSERT INTO posts (author, date, text, html_content, post_hash) VALUES (?, ?, ?, ?, ?)',
+                    [post.Auteur, post.Date, post.Texte, post.HTML, postHash]
+                );
 
-                try {
-                    const [result] = await db.query(
-                        'INSERT INTO posts (author, date, text, html_content, post_hash) VALUES (?, ?, ?, ?, ?)',
-                        [postAuthor, postDate, postText, htmlContent, postHash]
-                    );
-
-                    console.log(` Post ajouté avec ID: ${result.insertId}`);
-                    savedPosts.push({ id: result.insertId, Auteur: postAuthor, Date: postDate, Texte: postText, html_content: htmlContent });
-
-                } catch (sqlError) {
-                    console.error(" Erreur SQL lors de l'insertion:", sqlError.sqlMessage);
-                }
+                savedPosts.push({ id: result.insertId, Auteur: post.Auteur, Date: post.Date, Texte: post.Texte, html_content: post.HTML });
             } else {
-                console.log("ℹ️ Post déjà existant, aucune insertion.");
                 savedPosts.push(existingPost[0]);
             }
         }
 
-        console.log(" Tous les posts ont été traités avec succès.");
         res.status(201).json({ message: "Données enregistrées avec succès", savedPosts });
 
     } catch (error) {
@@ -97,11 +73,9 @@ const fetchAndSaveData = async (req, res) => {
     }
 };
 
-
-// Récupérer tous les posts depuis la base de données
 const getAllPosts = async (req, res) => {
     try {
-        const [posts] = await db.query('SELECT * FROM posts ORDER BY date DESC'); // Trie les posts du plus récent au plus ancien
+        const [posts] = await db.query('SELECT * FROM posts ORDER BY date DESC');
         res.status(200).json(posts);
     } catch (error) {
         console.error("Erreur lors de la récupération des posts:", error.message);
@@ -109,17 +83,69 @@ const getAllPosts = async (req, res) => {
     }
 };
 
-// Exportation des fonctions
-module.exports = {
-    saveData,
-    fetchAndSaveData,
-    getAllPosts
+// Nouvelle fonction pour exporter les posts en CSV
+const exportToCSV = async (req, res) => {
+    try {
+        const [posts] = await db.query('SELECT * FROM posts ORDER BY date DESC');
+
+        if (posts.length === 0) {
+            return res.status(404).json({ error: "Aucun post à exporter en CSV." });
+        }
+
+        const csvFilePath = saveToCSV(posts);
+        if (!fs.existsSync(csvFilePath)) {
+            return res.status(500).json({ error: "Erreur lors de la génération du fichier CSV." });
+        }
+
+        res.download(csvFilePath, 'posts.csv', (err) => {
+            if (err) {
+                res.status(500).json({ error: "Erreur serveur" });
+            }
+        });
+
+    } catch (error) {
+        console.error(" Erreur lors de l'exportation CSV :", error.message);
+        res.status(500).json({ error: "Erreur serveur" });
+    }
+};
+
+
+///////////////////////////////////////////////////////////////////
+
+
+
+const analyzeAndSaveOpportunities = async (req, res) => {
+    try {
+        const [posts] = await db.query('SELECT id, text FROM posts');
+
+        const results = [];
+
+        for (const post of posts) {
+            const analysis = await analyzeTextWithGemini(post.text);
+
+            const [insertResult] = await db.query(`
+                INSERT INTO business_opportunities (original_text, clean_text, is_opportunity, confidence_score, detection_date, token_count)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `, [
+                analysis.original_text,
+                analysis.clean_text,
+                analysis.is_opportunity,
+                analysis.confidence_score,
+                analysis.detection_date,
+                analysis.token_count
+            ]);
+
+            results.push({ id: insertResult.insertId, ...analysis });
+        }
+
+        res.status(201).json({ message: "Analyse et sauvegarde terminées", results });
+    } catch (error) {
+        console.error("Erreur analyse/sauvegarde :", error.message);
+        res.status(500).json({ error: "Erreur serveur" });
+    }
 };
 
 
 
 
-
-
-
-
+module.exports = { saveData, fetchAndSaveData, getAllPosts, exportToCSV , analyzeAndSaveOpportunities};
